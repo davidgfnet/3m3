@@ -22,9 +22,8 @@ LDFLAGS = -lopencm3_stm32f1 -ggdb \
 	-L$(LIBOPENCM3)/lib/ -Wl,-gc-sections -flto \
 	$(PLATFORM_DEFS)
 
-all:	modem3.bin
+all:	modem3.bin godfu.bin
 
-# Password manager firmware
 modem3.elf: main.o | $(LIBOPENCM3)/lib/libopencm3_stm32f1.a
 	$(CC) $^ -o $@ $(LDFLAGS) -Wl,-Ttext=$(APP_ADDRESS) -Wl,-Map,modem3.map
 
@@ -39,5 +38,9 @@ $(LIBOPENCM3)/lib/libopencm3_stm32f1.a:
 	$(CC) -c $< -o $@ $(CFLAGS)
 
 clean:
-	-rm -f *.elf *.o *.bin *.map
+	-rm -f *.elf *.o *.bin *.map godfu.bin
+
+godfu.bin:
+	g++ -o godfu.bin godfu.cc -lusb-1.0 -O2 -ggdb
+
 

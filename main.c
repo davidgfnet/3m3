@@ -230,7 +230,6 @@ static enum usbd_request_return_codes cdcacm_control_request(usbd_device *usbd_d
 	void (**complete)(usbd_device *usbd_dev, struct usb_setup_data *req))
 {
 	(void)complete;
-	(void)buf;
 	(void)usbd_dev;
 
 	switch (req->bRequest) {
@@ -262,7 +261,7 @@ static enum usbd_request_return_codes cdcacm_control_request(usbd_device *usbd_d
 	case 0xFF:
 		*len = 0;
 		*complete = reboot_info_dfu;
-		break;
+		return USBD_REQ_HANDLED;
 	}
 	return USBD_REQ_NOTSUPP;
 }
@@ -471,6 +470,8 @@ int main(void) {
 	usart_setup();
 
 	while (1) {
+		iwdg_reset();    // Keep watchdog happy
+
 		for (unsigned i = 0; i < UART_DEV_COUNT; i++) {
 			// Check whether we have data to send via UART
 			if (BUFCNT(host2dev_buffer[i]) > 0 && USART_CAN_SEND(uarts[i])) {
