@@ -40,7 +40,7 @@ $(LIBOPENCM3)/lib/libopencm3_stm32f1.a:
 clean:
 	-rm -f *.elf *.o *.bin *.map
 
-cli.bin:
+cli.bin:	cli.cc
 	g++ -o cli.bin cli.cc -lusb-1.0 -O2 -ggdb
 
 

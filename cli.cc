@@ -27,6 +27,11 @@ void fatal_error(const char * errmsg, int code) {
 }
 
 int main(int argc, char ** argv) {
+	if (argc < 2) {
+		printf("Usage: %s (dfu|on|off)\n", argv[0]);
+		return 1;
+	}
+
 	int result = libusb_init(NULL);
 	if (result < 0)
 		fatal_error("libusb_init failed!", result);
