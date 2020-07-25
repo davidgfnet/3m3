@@ -397,6 +397,22 @@ static void usart_setup(void) {
 	}
 }
 
+volatile uint64_t systick_counter_ms = 0;
+void sys_tick_handler() {
+	systick_counter_ms++;
+}
+
+void init_clock() {
+	// SysTick interrupt every N clock pulses: set reload to N-1
+	// Interrupt every ms assuming we have 72MHz clock
+	nvic_set_priority(NVIC_SYSTICK_IRQ, 0);
+	nvic_enable_irq(NVIC_SYSTICK_IRQ);
+	systick_set_clocksource(STK_CSR_CLKSOURCE_AHB_DIV8);
+	systick_set_reload(8999);
+	systick_interrupt_enable();
+	systick_counter_enable();
+}
+
 void init_low_power_modes() {
 	// Enable clock gating the Cortex on WFI/WFE
 	// Make sure we continue running after returning from ISR
@@ -459,6 +475,19 @@ void hard_fault_handler() {
 	while (1);
 }
 
+uint64_t turnon_time[UART_DEV_COUNT] = { ~0U };
+const uint32_t modemctrl[3][2] = { {GPIOA, GPIO8}, {GPIOB, GPIO15}, {GPIOB, GPIO14} };
+
+void modem_on(unsigned m) {
+	gpio_set_mode(modemctrl[m][0], GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, modemctrl[m][1]);
+	gpio_clear(modemctrl[m][0], modemctrl[m][1]);
+}
+
+void modem_off(unsigned m) {
+	gpio_set_mode(modemctrl[m][0], GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, modemctrl[m][1]);
+}
+
+
 int main(void) {
 	clear_reboot_flags();  // Make sure accidental reboot doesn't result into rebooting into DFU
 	iwdg_reset();  // Watchdog ping
@@ -477,14 +506,13 @@ int main(void) {
 	start_usb();
 
 	// Enable transistors slowly
-	const uint32_t steps[3][2] = { {GPIOA, GPIO8}, {GPIOB, GPIO15}, {GPIOB, GPIO14} };
-	for (unsigned i = 0; i < sizeof(steps)/sizeof(steps[0]); i++) {
-		gpio_set_mode(steps[i][0], GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, steps[i][1]);
-		gpio_clear(steps[i][0], steps[i][1]);
-		short_sleep(15);
+	for (unsigned i = 0; i < sizeof(modemctrl)/sizeof(modemctrl[0]); i++) {
+		// Setup a turnon in 200ms
+		turnon_time[i] = systick_counter_ms + 256U*i;
 	}
 
 	init_low_power_modes();
+	init_clock();
 
 	rcc_periph_clock_enable(RCC_USART1);  // USART clocks!
 	rcc_periph_clock_enable(RCC_USART2);
@@ -499,6 +527,12 @@ int main(void) {
 		iwdg_reset();    // Keep watchdog happy
 
 		for (unsigned i = 0; i < UART_DEV_COUNT; i++) {
+			// Handle on/off
+			if (turnon_time[i] < systick_counter_ms)
+				modem_on(i);
+			else
+				modem_off(i);
+
 			// Check whether we have data to send via UART
 			if (BUFCNT(host2dev_buffer[i]) > 0 && USART_CAN_SEND(uarts[i])) {
 				usart_send(uarts[i], host2dev_buffer[i].buffer[host2dev_buffer[i].readptr]);
