@@ -1,16 +1,18 @@
 /*
- * godfu.cc
+ * cli.cc
  *
  * Author: David Guillen Fandos (2020) <david@davidgf.net>
  *
- * Forces the device into DFU mode in order to re-flash it
+ * Operates the modem device
  *
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <cstring>
 #include <libusb-1.0/libusb.h>
 
+#define CMD_ON_OFF          0xfe
 #define CMD_GO_DFU          0xff
 #define VENDOR_ID         0x0483
 #define PRODUCT_ID        0x5740
@@ -39,8 +41,18 @@ int main(int argc, char ** argv) {
 	if (result < 0)
 		fatal_error("libusb_claim_interface failed!", result);
 
-	if (libusb_control_transfer(devh, CTRL_REQ_TYPE_IN, CMD_GO_DFU, 0, IFACE_NUMBER, 0, 0, TIMEOUT_MS) < 0)
-		fatal_error("Reboot into DFU command failed!", 0);
+	if (!strcmp(argv[1], "dfu")) {
+		if (libusb_control_transfer(devh, CTRL_REQ_TYPE_IN, CMD_GO_DFU, 0, IFACE_NUMBER, 0, 0, TIMEOUT_MS) < 0)
+			fatal_error("Reboot into DFU command failed!", 0);
+	}
+	else if (!strcmp(argv[1], "on")) {
+		if (libusb_control_transfer(devh, CTRL_REQ_TYPE_IN, CMD_ON_OFF, ~0, IFACE_NUMBER, 0, 0, TIMEOUT_MS) < 0)
+			fatal_error("Reboot trying to turn modems ON!", 0);
+	}
+	else if (!strcmp(argv[1], "off")) {
+		if (libusb_control_transfer(devh, CTRL_REQ_TYPE_IN, CMD_ON_OFF, 0, IFACE_NUMBER, 0, 0, TIMEOUT_MS) < 0)
+			fatal_error("Reboot trying to turn modems OFF!", 0);
+	}
 
 	libusb_release_interface(devh, 0);
 	libusb_close(devh);

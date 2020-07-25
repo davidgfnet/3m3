@@ -35,10 +35,14 @@
 #include "stm32-bootloader/reboot.h"
 
 static usbd_device *usbd_dev;
+volatile uint64_t systick_counter_ms = 0;
 
 // We have 3 UARTS
 #define UART_DEV_COUNT 3
 static const uint32_t uarts[] = { USART1, USART2, USART3 };
+
+uint64_t turnon_time[UART_DEV_COUNT] = { ~0ULL };
+const uint32_t modemctrl[3][2] = { {GPIOA, GPIO8}, {GPIOB, GPIO15}, {GPIOB, GPIO14} };
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -246,19 +250,27 @@ static enum usbd_request_return_codes cdcacm_control_request(usbd_device *usbd_d
 			return USBD_REQ_NOTSUPP;
 
 		unsigned idx = (req->wIndex >> 1) & 3;
-		const struct usb_cdc_line_coding *req = (struct usb_cdc_line_coding*)(*buf);
+		const struct usb_cdc_line_coding *creq = (struct usb_cdc_line_coding*)(*buf);
 		usart_disable(uarts[idx]);
-		usart_set_baudrate(uarts[idx], req->dwDTERate);
-		usart_set_databits(uarts[idx], req->bDataBits);
-		usart_set_stopbits(uarts[idx], req->bCharFormat == USB_CDC_1_STOP_BITS   ? USART_STOPBITS_1 :
-		                               req->bCharFormat == USB_CDC_1_5_STOP_BITS ? USART_STOPBITS_1_5 : USART_STOPBITS_2);
+		usart_set_baudrate(uarts[idx], creq->dwDTERate);
+		usart_set_databits(uarts[idx], creq->bDataBits);
+		usart_set_stopbits(uarts[idx], creq->bCharFormat == USB_CDC_1_STOP_BITS   ? USART_STOPBITS_1 :
+		                               creq->bCharFormat == USB_CDC_1_5_STOP_BITS ? USART_STOPBITS_1_5 : USART_STOPBITS_2);
 		usart_set_mode    (uarts[idx], USART_MODE_TX_RX);
-		usart_set_parity  (uarts[idx], req->bParityType == USB_CDC_NO_PARITY  ? USART_PARITY_NONE :
-		                               req->bParityType == USB_CDC_ODD_PARITY ? USART_PARITY_EVEN : USART_PARITY_ODD);
+		usart_set_parity  (uarts[idx], creq->bParityType == USB_CDC_NO_PARITY  ? USART_PARITY_NONE :
+		                               creq->bParityType == USB_CDC_ODD_PARITY ? USART_PARITY_EVEN : USART_PARITY_ODD);
 		usart_enable(uarts[idx]);
 
 		return USBD_REQ_HANDLED;
-	case 0xFF:
+	case 0xFE:   // Turn modems ON/OFF
+		for (unsigned i = 0; i < UART_DEV_COUNT; i++) {
+			if ((req->wValue & (1 << i)) && turnon_time[i] == ~0ULL)
+				turnon_time[i] = systick_counter_ms + 256U*i;
+			else if ((!(req->wValue & (1 << i))) && turnon_time[i] != ~0ULL)
+				turnon_time[i] = ~0ULL;
+		}
+		return USBD_REQ_HANDLED;
+	case 0xFF:   // Reboot into DFU mode please
 		*len = 0;
 		*complete = reboot_info_dfu;
 		return USBD_REQ_HANDLED;
@@ -397,7 +409,6 @@ static void usart_setup(void) {
 	}
 }
 
-volatile uint64_t systick_counter_ms = 0;
 void sys_tick_handler() {
 	systick_counter_ms++;
 }
@@ -474,9 +485,6 @@ void start_usb() {
 void hard_fault_handler() {
 	while (1);
 }
-
-uint64_t turnon_time[UART_DEV_COUNT] = { ~0U };
-const uint32_t modemctrl[3][2] = { {GPIOA, GPIO8}, {GPIOB, GPIO15}, {GPIOB, GPIO14} };
 
 void modem_on(unsigned m) {
 	gpio_set_mode(modemctrl[m][0], GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, modemctrl[m][1]);
