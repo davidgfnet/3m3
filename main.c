@@ -74,7 +74,7 @@ static const struct usb_device_descriptor dev = {
 	static const struct usb_endpoint_descriptor comm_endp##CNTRL_NUM[] = {{ \
 		.bLength = USB_DT_ENDPOINT_SIZE, \
 		.bDescriptorType = USB_DT_ENDPOINT, \
-		.bEndpointAddress =  0x85 + CNTRL_NUM /*0x80 | (CNTRL_NUM * 2 + 2)*/ , \
+		.bEndpointAddress = 0x85 + CNTRL_NUM, \
 		.bmAttributes = USB_ENDPOINT_ATTR_INTERRUPT, \
 		.wMaxPacketSize = 16, \
 		.bInterval = 255, \
@@ -223,7 +223,7 @@ void reboot_info_dfu() {
 }
 
 /* Buffer to be used for control requests. */
-uint8_t usbd_control_buffer[1024];
+uint8_t usbd_control_buffer[1500];
 
 static enum usbd_request_return_codes cdcacm_control_request(usbd_device *usbd_dev,
 	struct usb_setup_data *req, uint8_t **buf, uint16_t *len,
@@ -292,6 +292,8 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep) {
 	uint8_t tmpb[64];
 	int len = usbd_ep_read_packet(usbd_dev, ep, tmpb, sizeof(tmpb));
 
+	iwdg_reset();
+
 	// Stop the endpoint before we get to overflow the buffer
 	if (BUFCNT(*buf) > BUF_SIZE_NAK)
 		usbd_ep_nak_set(usbd_dev, ep, 1);
@@ -306,12 +308,12 @@ static void cdcacm_data_rx_cb(usbd_device *usbd_dev, uint8_t ep) {
 		p = (p + 1) & (BUF_SIZE - 1);
 	}
 	buf->writeptr = p;
-
-	gpio_toggle(GPIOC, GPIO13);
 }
 
 void usart_isr(int devn, uint8_t data) {
 	t_buffer *buf = &dev2host_buffer[devn];
+
+	iwdg_reset();
 
 	// Unfortunately drop data, this should not happen often (USB is faster)
 	if (BUFCNT(*buf) > BUF_SIZE_THR)
@@ -319,8 +321,6 @@ void usart_isr(int devn, uint8_t data) {
 
 	buf->buffer[buf->writeptr] = data;
 	buf->writeptr = (buf->writeptr + 1) & (BUF_SIZE - 1);
-
-	gpio_toggle(GPIOC, GPIO13);
 }
 
 void usart1_isr(void) {
@@ -342,10 +342,12 @@ static void cdcacm_set_config(usbd_device *usbd_dev, uint16_t wValue)
 	(void)wValue;
 
 	for (unsigned i = 0; i < UART_DEV_COUNT; i++) {
-		usbd_ep_setup(usbd_dev, 0x01 + i, USB_ENDPOINT_ATTR_BULK, 64, cdcacm_data_rx_cb);
-		usbd_ep_setup(usbd_dev, 0x81 + i, USB_ENDPOINT_ATTR_BULK, 64, NULL);
-		//usbd_ep_setup(usbd_dev, 0x82 + i*2, USB_ENDPOINT_ATTR_INTERRUPT, 16, NULL);
+		usbd_ep_setup(usbd_dev, 0x01 + i, USB_ENDPOINT_ATTR_BULK, 32, cdcacm_data_rx_cb);
+		usbd_ep_setup(usbd_dev, 0x81 + i, USB_ENDPOINT_ATTR_BULK, 32, NULL);
 	}
+
+	// Interrupt endpoint to report about device status
+	// usbd_ep_setup(usbd_dev, 0x85 + i, USB_ENDPOINT_ATTR_INTERRUPT, 16, NULL);
 
 	usbd_register_control_callback(
 				usbd_dev,
@@ -417,12 +419,20 @@ void usb_wakeup_isr() {
 	*USB_CNTR_REG &= ~USB_CNTR_FSUSP;
 }
 
+void short_sleep(unsigned rep) {
+	// Approx 50ms wait each iteration
+	while (rep--) {
+		iwdg_reset();
+		for (unsigned int i = 0; i < 1200000; i++)
+			__asm__("nop");
+	}
+}
+
 void reenumerate_usb() {
 	rcc_periph_clock_enable(RCC_GPIOA);
 	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, GPIO12);
 	gpio_clear(GPIOA, GPIO12);
-	for (unsigned int i = 0; i < 800000; i++)
-		__asm__("nop");
+	short_sleep(1);
 	gpio_set_mode(GPIOC, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, GPIO12);
 }
 
@@ -445,6 +455,10 @@ void start_usb() {
 	nvic_enable_irq(NVIC_USB_LP_CAN_RX0_IRQ);
 }
 
+void hard_fault_handler() {
+	while (1);
+}
+
 int main(void) {
 	clear_reboot_flags();  // Make sure accidental reboot doesn't result into rebooting into DFU
 	iwdg_reset();  // Watchdog ping
@@ -454,12 +468,24 @@ int main(void) {
 
 	// Start USB machinery
 	rcc_clock_setup_in_hse_8mhz_out_72mhz();
-	start_usb();
-
-	init_low_power_modes();
 
 	rcc_periph_clock_enable(RCC_GPIOA);   // For USARTs
 	rcc_periph_clock_enable(RCC_GPIOB);   // For USARTs
+
+	// Start USB
+	iwdg_reset();
+	start_usb();
+
+	// Enable transistors slowly
+	const uint32_t steps[3][2] = { {GPIOA, GPIO8}, {GPIOB, GPIO15}, {GPIOB, GPIO14} };
+	for (unsigned i = 0; i < sizeof(steps)/sizeof(steps[0]); i++) {
+		gpio_set_mode(steps[i][0], GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, steps[i][1]);
+		gpio_clear(steps[i][0], steps[i][1]);
+		short_sleep(15);
+	}
+
+	init_low_power_modes();
+
 	rcc_periph_clock_enable(RCC_USART1);  // USART clocks!
 	rcc_periph_clock_enable(RCC_USART2);
 	rcc_periph_clock_enable(RCC_USART3);
@@ -487,12 +513,10 @@ int main(void) {
 			if (BUFCNT(dev2host_buffer[i]) > 0) {
 				unsigned avail = BUFCNT(dev2host_buffer[i]);
 				unsigned maxeb = BUF_SIZE - dev2host_buffer[i].readptr;
-				unsigned tosend = min(avail, maxeb, 64);
+				unsigned tosend = min(avail, maxeb, 32);
 
-				unsigned sent = 0;
-				do {
-					sent = usbd_ep_write_packet(usbd_dev, 0x81 + i, &dev2host_buffer[i].buffer[dev2host_buffer[i].readptr], tosend);
-				} while (!sent);
+				// If the host does not (for some reason) read, we do not want a dead loop here, attempt it once
+				unsigned sent = usbd_ep_write_packet(usbd_dev, 0x81 + i, &dev2host_buffer[i].buffer[dev2host_buffer[i].readptr], tosend);
 
 				dev2host_buffer[i].readptr = (dev2host_buffer[i].readptr + sent) & (BUF_SIZE - 1);
 			}
