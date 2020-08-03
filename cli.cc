@@ -12,6 +12,7 @@
 #include <cstring>
 #include <libusb-1.0/libusb.h>
 
+#define CMD_RESET           0xfd
 #define CMD_ON_OFF          0xfe
 #define CMD_GO_DFU          0xff
 #define VENDOR_ID         0x0483
@@ -28,7 +29,7 @@ void fatal_error(const char * errmsg, int code) {
 
 int main(int argc, char ** argv) {
 	if (argc < 2) {
-		printf("Usage: %s (dfu|on|off)\n", argv[0]);
+		printf("Usage: %s (dfu|on|off|reset)\n", argv[0]);
 		return 1;
 	}
 
@@ -49,6 +50,10 @@ int main(int argc, char ** argv) {
 	if (!strcmp(argv[1], "dfu")) {
 		if (libusb_control_transfer(devh, CTRL_REQ_TYPE_IN, CMD_GO_DFU, 0, IFACE_NUMBER, 0, 0, TIMEOUT_MS) < 0)
 			fatal_error("Reboot into DFU command failed!", 0);
+	}
+	else if (!strcmp(argv[1], "reset")) {
+		if (libusb_control_transfer(devh, CTRL_REQ_TYPE_IN, CMD_RESET, 0, IFACE_NUMBER, 0, 0, TIMEOUT_MS) < 0)
+			fatal_error("Reset command failed!", 0);
 	}
 	else if (!strcmp(argv[1], "on")) {
 		if (libusb_control_transfer(devh, CTRL_REQ_TYPE_IN, CMD_ON_OFF, ~0, IFACE_NUMBER, 0, 0, TIMEOUT_MS) < 0)

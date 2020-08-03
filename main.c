@@ -262,6 +262,10 @@ static enum usbd_request_return_codes cdcacm_control_request(usbd_device *usbd_d
 		usart_enable(uarts[idx]);
 
 		return USBD_REQ_HANDLED;
+	case 0xFD:   // Full system reset
+		iwdg_reset();
+		scb_reset_system();
+		return USBD_REQ_HANDLED;
 	case 0xFE:   // Turn modems ON/OFF
 		for (unsigned i = 0; i < UART_DEV_COUNT; i++) {
 			if ((req->wValue & (1 << i)) && turnon_time[i] == ~0ULL)
